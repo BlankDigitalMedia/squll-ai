@@ -3,11 +3,12 @@
 	import { loadNote, saveNote, saveLayout, type PanelLayout } from '@/storage';
 
 	type Props = {
+		tabMode?: boolean;
 		onLayoutChange?: (layout: Partial<PanelLayout>) => void;
 		onMinimize?: () => void;
 	};
 
-	let { onLayoutChange, onMinimize }: Props = $props();
+	let { tabMode = false, onLayoutChange, onMinimize }: Props = $props();
 
 	let content = $state('');
 	let editor: HTMLDivElement | null = $state(null);
@@ -34,7 +35,7 @@
 	}
 
 	function handleDragStart(e: MouseEvent) {
-		if (!panel) return;
+		if (!panel || tabMode) return;
 		isDragging = true;
 		const rect = panel.getBoundingClientRect();
 		dragStart = {
@@ -46,7 +47,7 @@
 	}
 
 	function handleResizeStart(e: MouseEvent) {
-		if (!panel) return;
+		if (!panel || tabMode) return;
 		isResizing = true;
 		const rect = panel.getBoundingClientRect();
 		resizeStart = {
@@ -94,13 +95,19 @@
 	}
 
 	function handleMinimize() {
-		if (onMinimize) {
+		if (tabMode) {
+			chrome.runtime.sendMessage({ type: 'close-notes-tab' }).catch(() => {
+				// Ignore errors if background script is not available
+			});
+		} else if (onMinimize) {
 			onMinimize();
 		}
 	}
 
 	onMount(() => {
-		hostElement = document.getElementById('extension-root');
+		if (!tabMode) {
+			hostElement = document.getElementById('extension-root');
+		}
 
 		loadNote().then((savedContent) => {
 			content = savedContent;
@@ -109,12 +116,16 @@
 			}
 		});
 
-		document.addEventListener('mousemove', handleMouseMove);
-		document.addEventListener('mouseup', handleMouseUp);
+		if (!tabMode) {
+			document.addEventListener('mousemove', handleMouseMove);
+			document.addEventListener('mouseup', handleMouseUp);
+		}
 
 		return () => {
-			document.removeEventListener('mousemove', handleMouseMove);
-			document.removeEventListener('mouseup', handleMouseUp);
+			if (!tabMode) {
+				document.removeEventListener('mousemove', handleMouseMove);
+				document.removeEventListener('mouseup', handleMouseUp);
+			}
 			if (saveTimeout) clearTimeout(saveTimeout);
 		};
 	});
@@ -126,7 +137,7 @@
 	class:dragging={isDragging}
 	class:resizing={isResizing}
 >
-	<div class="header" onmousedown={handleDragStart} role="button" tabindex="0" aria-label="Drag to move panel">
+	<div class="header" onmousedown={handleDragStart} role="button" tabindex="0" aria-label={tabMode ? "Notes header" : "Drag to move panel"} class:tab-mode={tabMode}>
 		<div class="header-title">Notes</div>
 		<button
 			class="minimize-button"
@@ -134,8 +145,8 @@
 				e.stopPropagation();
 				handleMinimize();
 			}}
-			aria-label="Minimize panel"
-			title="Minimize"
+			aria-label={tabMode ? "Close tab" : "Minimize panel"}
+			title={tabMode ? "Close" : "Minimize"}
 		>
 			−
 		</button>
@@ -151,7 +162,9 @@
 		>
 		</div>
 	</div>
-	<div class="resize-handle" onmousedown={handleResizeStart} role="button" tabindex="0" aria-label="Resize panel"></div>
+	{#if !tabMode}
+		<div class="resize-handle" onmousedown={handleResizeStart} role="button" tabindex="0" aria-label="Resize panel"></div>
+	{/if}
 </div>
 
 <style>
@@ -172,6 +185,13 @@
 		min-height: 200px;
 		overflow: hidden;
 		color: #000000;
+	}
+
+	:global(.notes-tab-container .panel) {
+		border-radius: 0;
+		border: none;
+		min-width: 0;
+		min-height: 0;
 	}
 
 	.panel.dragging {
@@ -195,6 +215,10 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
+	}
+
+	.header.tab-mode {
+		cursor: default;
 	}
 
 	.header-title {

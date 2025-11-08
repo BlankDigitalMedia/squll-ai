@@ -32,6 +32,10 @@ export default defineConfig({
 					resolve(__dirname, 'manifest.json'),
 					resolve(distDir, 'manifest.json')
 				);
+				copyFileSync(
+					resolve(__dirname, 'notes.html'),
+					resolve(distDir, 'notes.html')
+				);
 				// Copy icons folder
 				const iconsSrc = resolve(__dirname, 'icons');
 				const iconsDest = resolve(distDir, 'icons');
@@ -49,10 +53,11 @@ export default defineConfig({
 	build: {
 		outDir: resolve(__dirname, 'dist'),
 		emptyOutDir: true,
-		rollupOptions: {
+			rollupOptions: {
 			input: {
 				background: resolve(__dirname, 'background.ts'),
-				'content-script': resolve(__dirname, 'content-script.ts')
+				'content-script': resolve(__dirname, 'content-script.ts'),
+				notes: resolve(__dirname, 'notes.ts')
 			},
 			output: {
 				entryFileNames: '[name].js',

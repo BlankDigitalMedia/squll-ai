@@ -6,8 +6,8 @@ This document provides essential context for AI agents working with this codebas
 
 **Crystal Skull Notepad** is a Chrome browser extension that provides a Notion-style floating notepad overlay for taking notes while browsing. The project consists of two main parts:
 
-1. **SvelteKit Web Application** (`src/`) - Main application structure
-2. **Chrome Extension** (`extension/`) - Browser extension implementation
+1. **SvelteKit Web Application** (`src/`) - Currently unused scaffolding (default SvelteKit routes). The storage utilities (`src/storage/`) are shared with the extension.
+2. **Chrome Extension** (`extension/`) - Browser extension implementation (the main application)
 
 ## Technology Stack
 
@@ -30,7 +30,9 @@ crystal-skull-v2/
 ├── extension/             # Chrome extension code
 │   ├── background.ts      # Service worker (extension entry point)
 │   ├── content-script.ts  # Content script (injects panel into pages)
-│   ├── panel/             # Panel component (Svelte)
+│   ├── panel/             # Panel components (Svelte)
+│   │   ├── Panel.svelte   # Main notepad panel component
+│   │   └── FloatingButton.svelte  # Floating toggle button
 │   ├── manifest.json      # Extension manifest
 │   └── vite.config.ts     # Extension-specific Vite config
 │
@@ -41,25 +43,37 @@ crystal-skull-v2/
 
 ### Extension Architecture
 
-The extension uses a **Shadow DOM** approach for isolation:
+The extension uses a **Shadow DOM** approach for isolation with **two separate shadow roots**:
 
 1. **Background Script** (`extension/background.ts`): Listens for extension icon clicks and sends messages to content scripts
 2. **Content Script** (`extension/content-script.ts`): 
-   - Creates a shadow DOM root (`#extension-root`)
-   - Mounts the Svelte Panel component inside the shadow DOM
+   - Creates **two separate shadow DOM roots** for complete isolation:
+     - `#extension-root` - Hosts the Panel component
+     - `#button-root` - Hosts the FloatingButton component
+   - Mounts both Svelte components inside their respective shadow DOMs
    - Handles panel visibility toggling
    - Manages panel positioning and sizing
+   - Coordinates visibility between panel and floating button
 3. **Panel Component** (`extension/panel/Panel.svelte`): The main UI component with drag/resize functionality
-4. **Shadow-root Styles**: Styles do not leak into Shadow DOM. The content script injects the compiled stylesheet into the shadow root and sets a white background on host and mount elements so the window is opaque.
+   - Draggable via header
+   - Resizable via bottom-right handle
+   - Minimizable (hides panel, shows floating button)
+4. **FloatingButton Component** (`extension/panel/FloatingButton.svelte`): A draggable floating button that appears when the panel is minimized
+   - Toggles panel visibility on click
+   - Draggable to reposition (distinguishes drag from click)
+   - Position persists across sessions
+   - Default position: 2% from left, 90% from top (near bottom-left)
+5. **Shadow-root Styles**: Styles do not leak into Shadow DOM. The content script injects the compiled stylesheet (`content-script.css`) into both shadow roots and sets appropriate backgrounds on host and mount elements so the windows are opaque.
 
 ### Storage Layer
 
 The `src/storage/index.ts` module provides a clean abstraction over Chrome's storage API:
 
 - `loadNote()` / `saveNote()` - Note content persistence
-- `loadLayout()` / `saveLayout()` - Panel position, size, and visibility state
+- `loadLayout()` / `saveLayout()` - Panel position, size, visibility, and minimized state
+- `loadButtonLayout()` / `saveButtonLayout()` - FloatingButton position persistence
 - Uses `chrome.storage.sync` for cross-device synchronization
-- Resiliency: When the extension context is invalidated (e.g., service worker restarts), storage calls fall back to `localStorage` (`cs_note`, `cs_layout`) to avoid runtime errors; sync storage resumes on next valid context.
+- Resiliency: When the extension context is invalidated (e.g., service worker restarts), storage calls fall back to `localStorage` (`cs_note`, `cs_layout`, `cs_button_layout`) to avoid runtime errors; sync storage resumes on next valid context.
 
 ### Svelte 5 Patterns
 
@@ -206,10 +220,18 @@ function debouncedSave(text: string) {
 
 ### Layout Persistence
 
-Panel position, size, and visibility are persisted:
-- Saved on drag/resize end
+**Panel Layout:**
+- Position, size, visibility, and minimized state are persisted
+- Saved on drag/resize end and when minimized/shown
 - Loaded on initialization
 - Defaults: 15% from left, 10% from top, 49% width, 80% height
+
+**FloatingButton Layout:**
+- Position is persisted separately from panel layout
+- Saved when button is dragged to a new position
+- Loaded on initialization
+- Defaults: 2% from left, 90% from top (near bottom-left)
+- Button visibility is inverse of panel visibility (shown when panel is hidden)
 
 ## Common Tasks
 
@@ -225,6 +247,15 @@ Panel position, size, and visibility are persisted:
 - Edit `extension/panel/Panel.svelte`
 - Panel is draggable (via header) and resizable (via bottom-right handle)
 - Layout changes trigger `onLayoutChange` callback which saves to storage
+- Minimize button triggers `onMinimize` callback which toggles visibility
+
+### Modifying the FloatingButton
+
+- Edit `extension/panel/FloatingButton.svelte`
+- Button is draggable (entire button surface)
+- Distinguishes between drag and click: only toggles panel if no significant drag occurred
+- Position changes trigger `saveButtonLayout()` automatically
+- Button visibility is managed by content script based on panel state
 
 ### Adding Storage
 
@@ -263,14 +294,17 @@ Key dependencies:
 
 ## Notes for AI Agents
 
-1. **Always check** if changes affect both web app and extension
-2. **Shadow DOM** means extension styles won't affect page styles (and vice versa)
-3. **Storage operations** are async - always use Promises/async-await
-4. **Svelte 5 runes** are required - don't use old Svelte 4 patterns
-5. **Panel positioning** uses fixed positioning with manual left/top/width/height
-6. **Extension manifest** is V3 - service worker, not background page
-7. **Svelte MCP tools** - Use `list-sections` first, then `get-documentation` for Svelte topics
-8. **Code validation** - Always run `svelte-autofixer` on Svelte code before finalizing
+1. **Web app is scaffolding** - The `src/routes/` directory contains default SvelteKit pages that are currently unused. Only `src/storage/` is actively used by the extension.
+2. **Two shadow roots** - The extension creates separate shadow DOMs for panel and floating button for complete isolation
+3. **Shadow DOM** means extension styles won't affect page styles (and vice versa)
+4. **Storage operations** are async - always use Promises/async-await
+5. **Svelte 5 runes** are required - don't use old Svelte 4 patterns
+6. **Panel positioning** uses fixed positioning with manual left/top/width/height
+7. **FloatingButton positioning** also uses fixed positioning, separate from panel
+8. **Extension manifest** is V3 - service worker, not background page
+9. **Svelte MCP tools** - Use `list-sections` first, then `get-documentation` for Svelte topics
+10. **Code validation** - Always run `svelte-autofixer` on Svelte code before finalizing
+11. **Button vs Panel visibility** - They are inverse: button shows when panel is hidden, and vice versa
 
 ## Common Pitfalls
 
@@ -292,6 +326,11 @@ Key dependencies:
   - Fix: Storage helpers fall back to `localStorage`; refresh page to restore synced storage usage
 
 - Transparent panel background
-  - Ensure `content-script.css` is injected into the shadow root
+  - Ensure `content-script.css` is injected into both shadow roots (panel and button)
   - Confirm `content-script.css` is listed under `web_accessible_resources` and exists in `extension/dist`
+
+- FloatingButton not appearing when panel is minimized
+  - Check that `button-root` element is created in content script
+  - Verify button shadow root has stylesheet injected
+  - Confirm `updateButtonVisibility()` is called with correct state
 

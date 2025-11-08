@@ -1,25 +1,20 @@
-chrome.action.onClicked.addListener(() => {
-	chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-		if (tabs[0]?.id) {
-			chrome.tabs.sendMessage(tabs[0].id, { type: 'toggle-panel' }).catch((error) => {
-				// Content script might not be ready yet, try injecting it
-				if (error.message.includes('Receiving end does not exist')) {
-					chrome.scripting.executeScript({
-						target: { tabId: tabs[0].id! },
-						files: ['content-script.js']
-					}).then(() => {
-						// Wait a bit for the script to initialize, then send message
-						setTimeout(() => {
-							chrome.tabs.sendMessage(tabs[0].id!, { type: 'toggle-panel' }).catch(() => {
-								// Ignore errors on retry
-							});
-						}, 100);
-					}).catch(() => {
-						// Ignore injection errors
-					});
-				}
-			});
-		}
-	});
+const notesUrl = chrome.runtime.getURL('notes.html');
+
+chrome.action.onClicked.addListener(async () => {
+	const tabs = await chrome.tabs.query({ url: notesUrl });
+	if (tabs[0]?.id) {
+		await chrome.tabs.update(tabs[0].id, { active: true });
+	} else {
+		await chrome.tabs.create({ url: notesUrl });
+	}
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+	if (message.type === 'close-notes-tab' && sender.tab?.id) {
+		chrome.tabs.remove(sender.tab.id).catch(() => {
+			// Ignore errors if tab is already closed
+		});
+	}
+	return true;
 });
 

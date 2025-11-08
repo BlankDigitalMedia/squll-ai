@@ -3,19 +3,19 @@
 	"name": "Crystal Skull Notepad",
 	"version": "0.0.1",
 	"description": "A Notion-style floating notepad overlay for taking notes while browsing",
-	"permissions": ["storage", "scripting"],
+	"permissions": ["storage", "scripting", "tabs"],
 	"host_permissions": ["<all_urls>"],
 	"background": {
 		"service_worker": "background.js"
 	},
 	"web_accessible_resources": [
 		{
-			"resources": ["content-script.css"],
+			"resources": ["content-script.css", "notes.html"],
 			"matches": ["<all_urls>"]
 		}
 	],
 	"action": {
-		"default_title": "Toggle Note Panel",
+		"default_title": "Open Notes",
 		"default_icon": {
 			"16": "icons/icon16.png",
 			"32": "icons/icon32.png",
