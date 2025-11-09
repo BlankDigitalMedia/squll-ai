@@ -63,7 +63,7 @@ The extension uses a **Shadow DOM** approach for isolation with **two separate s
    - Draggable to reposition (distinguishes drag from click)
    - Position persists across sessions
    - Default position: 2% from left, 90% from top (near bottom-left)
-5. **Shadow-root Styles**: Styles do not leak into Shadow DOM. The content script injects the compiled stylesheet (`content-script.css`) into both shadow roots and sets appropriate backgrounds on host and mount elements so the windows are opaque.
+5. **Shadow-root Styles**: Styles do not leak into Shadow DOM. **CRITICAL**: Svelte components compiled with vite-plugin-svelte inject CSS into `document.head` by default (css="injected" mode). Shadow DOM does NOT inherit styles from document.head. The content script uses a MutationObserver to mirror all Svelte-injected `<style>` tags from document.head into both shadow roots, ensuring styles apply correctly.
 
 ### Storage Layer
 
@@ -155,7 +155,7 @@ npm run build:ext
 1. Build the extension: `npm run build:ext`
 2. Load unpacked extension from `extension/dist/` in Chrome
 3. Use `npm run dev:ext` for watch mode during development
-4. If styles are missing in the panel, confirm `content-script.css` is present in `extension/dist`, listed under `web_accessible_resources`, and injected into the shadow root.
+4. **If styles are missing**: Check that `injectStyles()` in `content-script.ts` is mirroring styles from `document.head` into both shadow roots. Do NOT assume CSS files exist - Svelte may inject CSS directly into document.head for IIFE builds.
 
 ## Code Conventions
 
@@ -196,14 +196,45 @@ host.id = 'extension-root';
 const shadow = host.attachShadow({ mode: 'open' });
 ```
 
-To ensure styles apply inside the shadow root, inject the compiled stylesheet:
+**CRITICAL CSS INJECTION PATTERN**: Svelte components compiled with vite-plugin-svelte use `css="injected"` mode by default for IIFE builds. This injects component styles into `document.head`, NOT into shadow roots. Shadow DOM does NOT inherit styles from document.head.
+
+The content script (`extension/content-script.ts`) uses a MutationObserver to mirror all Svelte-injected `<style>` tags from `document.head` into both shadow roots:
 
 ```typescript
-const styleLink = document.createElement('link');
-styleLink.rel = 'stylesheet';
-styleLink.href = chrome.runtime.getURL('content-script.css');
-shadow.appendChild(styleLink);
+function injectStyles(targetShadow: ShadowRoot) {
+  // Mirror existing styles from document.head
+  Array.from(document.head.querySelectorAll('style')).forEach(style => {
+    if (!targetShadow.querySelector(`style[data-svelte-mirror="${style.textContent?.slice(0, 50)}"]`)) {
+      const mirror = style.cloneNode(true) as HTMLStyleElement;
+      mirror.setAttribute('data-svelte-mirror', style.textContent?.slice(0, 50) || '');
+      targetShadow.appendChild(mirror);
+    }
+  });
+
+  // Watch for new styles added to document.head
+  const observer = new MutationObserver(mutations => {
+    mutations.forEach(mutation => {
+      mutation.addedNodes.forEach(node => {
+        if (node instanceof HTMLStyleElement && node.parentNode === document.head) {
+          const mirror = node.cloneNode(true) as HTMLStyleElement;
+          mirror.setAttribute('data-svelte-mirror', node.textContent?.slice(0, 50) || '');
+          targetShadow.appendChild(mirror);
+        }
+      });
+    });
+  });
+
+  observer.observe(document.head, { childList: true, subtree: false });
+}
 ```
+
+This pattern ensures:
+- Styles apply immediately when components mount
+- New styles added dynamically are automatically mirrored
+- Both shadow roots (panel and button) receive all styles
+- No dependency on CSS file emission or web_accessible_resources
+
+**DO NOT** attempt to inject CSS via `<link>` tags unless you verify the CSS file actually exists in `extension/dist` after build. The build may not emit CSS files for IIFE entries.
 
 ### Debounced Saving
 
@@ -305,6 +336,8 @@ Key dependencies:
 9. **Svelte MCP tools** - Use `list-sections` first, then `get-documentation` for Svelte topics
 10. **Code validation** - Always run `svelte-autofixer` on Svelte code before finalizing
 11. **Button vs Panel visibility** - They are inverse: button shows when panel is hidden, and vice versa
+12. **CSS Injection Pattern** - Svelte injects CSS into document.head for IIFE builds. Shadow DOM does NOT inherit these styles. The content script MUST mirror styles from document.head into shadow roots using MutationObserver. This is the ONLY reliable way to style Shadow DOM components in this build setup.
+13. **No CSS Files Emitted** - The build may not emit CSS files for IIFE entries. Do NOT rely on CSS file injection - always mirror from document.head.
 
 ## Common Pitfalls
 
@@ -312,8 +345,12 @@ Key dependencies:
 - ❌ Don't use Svelte 4 patterns (`let:` instead of `$state`)
 - ❌ Don't assume styles leak between extension and page (Shadow DOM isolation)
 - ❌ Don't forget to handle async storage operations properly
+- ❌ **NEVER assume CSS files are emitted** - Svelte may inject CSS into document.head instead
+- ❌ **NEVER inject CSS links without verifying files exist** - This causes ERR_FILE_NOT_FOUND errors
+- ❌ **NEVER assume Shadow DOM inherits styles from document.head** - It does NOT
 - ✅ Always use the storage abstraction layer, not direct Chrome API calls
 - ✅ Remember panel state persists across page reloads
+- ✅ **ALWAYS mirror styles from document.head into shadow roots** using MutationObserver
 
 ## Troubleshooting
 
@@ -325,12 +362,25 @@ Key dependencies:
   - Cause: Old content script remains after service worker restart/extension reload
   - Fix: Storage helpers fall back to `localStorage`; refresh page to restore synced storage usage
 
+- **Panel/FloatingButton render unstyled (no glass background, no rounded corners, no blur)**
+  - **Root Cause**: Svelte injects CSS into `document.head`, but Shadow DOM does NOT inherit from document.head
+  - **Solution**: The `injectStyles()` function in `content-script.ts` uses a MutationObserver to mirror all `<style>` tags from document.head into both shadow roots
+  - **Verification**: Check DevTools → Elements → shadow roots contain `<style>` tags with component CSS
+  - **DO NOT**: Try to inject CSS via `<link>` tags unless you verify the CSS file exists in `extension/dist` after build
+  - **DO NOT**: Assume CSS files are emitted - IIFE builds may inject CSS directly into document.head
+
 - Transparent panel background
-  - Ensure `content-script.css` is injected into both shadow roots (panel and button)
-  - Confirm `content-script.css` is listed under `web_accessible_resources` and exists in `extension/dist`
+  - Ensure styles are mirrored from document.head into both shadow roots (panel and button)
+  - Verify MutationObserver is running and copying styles correctly
+  - Check that mount elements have proper background styles set
 
 - FloatingButton not appearing when panel is minimized
   - Check that `button-root` element is created in content script
-  - Verify button shadow root has stylesheet injected
+  - Verify button shadow root has styles mirrored from document.head
   - Confirm `updateButtonVisibility()` is called with correct state
+
+- CSS file 404 errors in console (ERR_FILE_NOT_FOUND)
+  - **Cause**: Code attempts to inject CSS via `<link>` tags, but no CSS file exists in `extension/dist`
+  - **Solution**: The `injectStyles()` function checks if CSS files exist before creating links, but the primary solution is mirroring styles from document.head
+  - **Prevention**: Always use the MutationObserver pattern to mirror styles, not file-based injection
 

@@ -8,6 +8,11 @@
 
 	let { onToggle }: Props = $props();
 
+	const BUTTON_SIZE = 56;
+	const DRAG_THRESHOLD = 5;
+	const DEFAULT_BUTTON_X_PERCENT = 0.02;
+	const DEFAULT_BUTTON_Y_PERCENT = 0.9;
+
 	let button: HTMLButtonElement | null = $state(null);
 	let isDragging = $state(false);
 	let hasDragged = $state(false);
@@ -34,12 +39,11 @@
 		if (isDragging && button && hostElement) {
 			const newX = e.clientX - dragStart.x;
 			const newY = e.clientY - dragStart.y;
-			const buttonSize = 56; // Button diameter
-			const constrainedX = Math.max(0, Math.min(newX, window.innerWidth - buttonSize));
-			const constrainedY = Math.max(0, Math.min(newY, window.innerHeight - buttonSize));
+			const constrainedX = Math.max(0, Math.min(newX, window.innerWidth - BUTTON_SIZE));
+			const constrainedY = Math.max(0, Math.min(newY, window.innerHeight - BUTTON_SIZE));
 			
 			// Check if mouse actually moved from initial position
-			if (Math.abs(e.clientX - initialDragPosition.x) > 5 || Math.abs(e.clientY - initialDragPosition.y) > 5) {
+			if (Math.abs(e.clientX - initialDragPosition.x) > DRAG_THRESHOLD || Math.abs(e.clientY - initialDragPosition.y) > DRAG_THRESHOLD) {
 				hasDragged = true;
 			}
 			
@@ -78,8 +82,8 @@
 
 		loadButtonLayout().then((layout) => {
 			const defaultLayout = {
-				x: window.innerWidth * 0.02, // 2% from left
-				y: window.innerHeight * 0.9 // 90% from top (near bottom)
+				x: window.innerWidth * DEFAULT_BUTTON_X_PERCENT,
+				y: window.innerHeight * DEFAULT_BUTTON_Y_PERCENT
 			};
 
 			const finalLayout = { ...defaultLayout, ...layout };
@@ -98,6 +102,9 @@
 		return () => {
 			document.removeEventListener('mousemove', handleMouseMove);
 			document.removeEventListener('mouseup', handleMouseUp);
+			// Reset drag state
+			isDragging = false;
+			hasDragged = false;
 		};
 	});
 </script>

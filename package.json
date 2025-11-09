@@ -12,8 +12,11 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"format": "prettier --write .",
 		"lint": "prettier --check . && eslint .",
-		"build:ext": "vite build -c extension/vite.config.ts",
-		"dev:ext": "vite build -c extension/vite.config.ts --watch"
+		"build:ext": "EXT_TARGET=content-script vite build -c extension/vite.config.ts && EXT_TARGET=background vite build -c extension/vite.config.ts && EXT_TARGET=notes vite build -c extension/vite.config.ts",
+		"dev:ext": "EXT_TARGET=content-script vite build -c extension/vite.config.ts --watch"
+	},
+	"dependencies": {
+		"dexie": "^4.0.9"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^1.4.0",

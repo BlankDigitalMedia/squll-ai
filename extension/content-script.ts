@@ -2,12 +2,115 @@ import { mount } from 'svelte';
 import Panel from './panel/Panel.svelte';
 import FloatingButton from './panel/FloatingButton.svelte';
 import { loadLayout, saveLayout } from '@/storage';
+import './content-script.css';
+
+const MAX_Z_INDEX = 2147483647;
+const DEFAULT_PANEL_LAYOUT = {
+	X_PERCENT: 0.15,
+	Y_PERCENT: 0.1,
+	WIDTH_PERCENT: 0.49,
+	HEIGHT_PERCENT: 0.8
+};
+const DEFAULT_BUTTON_LAYOUT = {
+	X_PERCENT: 0.02,
+	Y_PERCENT: 0.9
+};
 
 let panelInstance: ReturnType<typeof mount> | null = null;
 let buttonInstance: ReturnType<typeof mount> | null = null;
 let hostElement: HTMLElement | null = null;
 let buttonHostElement: HTMLElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
+
+// Track copied style hashes per shadow to avoid duplicates
+const shadowToCopiedStyles = new WeakMap<ShadowRoot, Set<string>>();
+let headObserver: MutationObserver | null = null;
+let registeredShadows: Set<ShadowRoot> = new Set();
+
+function hashText(text: string): string {
+	let h = 0;
+	for (let i = 0; i < text.length; i++) {
+		h = (h * 31 + text.charCodeAt(i)) | 0;
+	}
+	return `${h}:${text.length}`;
+}
+
+function copyStyleIntoShadow(styleEl: HTMLStyleElement, targetShadow: ShadowRoot) {
+	const text = styleEl.textContent || '';
+	if (!text) return;
+	const copied = shadowToCopiedStyles.get(targetShadow) ?? new Set<string>();
+	const key = hashText(text);
+	if (copied.has(key)) return;
+	const clone = document.createElement('style');
+	clone.textContent = text;
+	targetShadow.appendChild(clone);
+	copied.add(key);
+	shadowToCopiedStyles.set(targetShadow, copied);
+}
+
+function shouldMirrorStyle(styleEl: HTMLStyleElement): boolean {
+	const text = styleEl.textContent || '';
+	if (!text) return false;
+	// Heuristic: Svelte component CSS contains hashed selectors like `.svelte-xxxx`
+	// Match our key selectors to be safe and future-proof.
+	const hintSelectors = ['.svelte-', '.panel', '.floating-button', '.header', '.editor', '.resize-handle', '.notes-tab-container'];
+	return hintSelectors.some((s) => text.includes(s));
+}
+
+function ensureHeadObserver() {
+	if (headObserver) return;
+	headObserver = new MutationObserver((mutations) => {
+		for (const m of mutations) {
+			for (const node of Array.from(m.addedNodes)) {
+				if (node instanceof HTMLStyleElement && shouldMirrorStyle(node)) {
+					for (const s of registeredShadows) {
+						copyStyleIntoShadow(node, s);
+					}
+				}
+			}
+		}
+	});
+	if (document.head) {
+		headObserver.observe(document.head, { childList: true });
+	}
+}
+
+function injectStyles(targetShadow: ShadowRoot) {
+	// 1) Mirror any Svelte-injected <style> from document.head into the shadow root.
+	registeredShadows.add(targetShadow);
+	ensureHeadObserver();
+	for (const styleEl of Array.from(document.head.querySelectorAll('style'))) {
+		if (shouldMirrorStyle(styleEl)) {
+			copyStyleIntoShadow(styleEl as HTMLStyleElement, targetShadow);
+		}
+	}
+
+	// 2) Additionally, link external CSS if it ever exists (no-ops if missing).
+	const ensureLink = (href: string) => {
+		const alreadyHas = Array.from(targetShadow.querySelectorAll('link')).some(
+			(l) => (l as HTMLLinkElement).href.includes(href)
+		);
+		if (!alreadyHas) {
+			const url = chrome.runtime.getURL(href);
+			// Only append if the asset actually exists to avoid console noise
+			fetch(url, { method: 'HEAD' })
+				.then((res) => {
+					if (res.ok) {
+						const link = document.createElement('link');
+						link.rel = 'stylesheet';
+						link.href = url;
+						targetShadow.appendChild(link);
+					}
+				})
+				.catch(() => {
+					/* ignore */
+				});
+		}
+	};
+	ensureLink('content-script.css');
+	ensureLink('style.css');
+	ensureLink('notes.css');
+}
 
 function updateButtonVisibility(show: boolean) {
 	if (buttonHostElement) {
@@ -29,22 +132,14 @@ function initPanel() {
 			buttonHostElement = existingButtonHost;
 			// Set initial position if not already set
 			if (!existingButtonHost.style.left || !existingButtonHost.style.top) {
-				existingButtonHost.style.left = `${window.innerWidth * 0.02}px`;
-				existingButtonHost.style.top = `${window.innerHeight * 0.9}px`;
+				existingButtonHost.style.left = `${window.innerWidth * DEFAULT_BUTTON_LAYOUT.X_PERCENT}px`;
+				existingButtonHost.style.top = `${window.innerHeight * DEFAULT_BUTTON_LAYOUT.Y_PERCENT}px`;
 			}
 			// Remount button if needed
 			if (!buttonInstance && existingButtonHost.shadowRoot && existingButtonHost.shadowRoot.childNodes.length === 0) {
 				const btnShadow = existingButtonHost.shadowRoot;
 				// Inject CSS if needed
-				const alreadyHasLink = Array.from(btnShadow.querySelectorAll('link')).some((l) =>
-					(l as HTMLLinkElement).href.includes('content-script.css')
-				);
-				if (!alreadyHasLink) {
-					const styleLink2 = document.createElement('link');
-					styleLink2.rel = 'stylesheet';
-					styleLink2.href = chrome.runtime.getURL('content-script.css');
-					btnShadow.appendChild(styleLink2);
-				}
+				injectStyles(btnShadow);
 				const buttonMountPoint = document.createElement('div');
 				buttonMountPoint.style.pointerEvents = 'auto';
 				btnShadow.appendChild(buttonMountPoint);
@@ -61,10 +156,10 @@ function initPanel() {
 		// Panel should already be mounted, but restore layout (position, size, visibility)
 		loadLayout().then((layout) => {
 			const defaultLayout = {
-				x: window.innerWidth * 0.15,
-				y: window.innerHeight * 0.1,
-				width: window.innerWidth * 0.49,
-				height: window.innerHeight * 0.8,
+				x: window.innerWidth * DEFAULT_PANEL_LAYOUT.X_PERCENT,
+				y: window.innerHeight * DEFAULT_PANEL_LAYOUT.Y_PERCENT,
+				width: window.innerWidth * DEFAULT_PANEL_LAYOUT.WIDTH_PERCENT,
+				height: window.innerHeight * DEFAULT_PANEL_LAYOUT.HEIGHT_PERCENT,
 				visible: layout.visible !== undefined ? layout.visible : true
 			};
 
@@ -92,16 +187,13 @@ function initPanel() {
 	const host = document.createElement('div');
 	host.id = 'extension-root';
 	host.style.position = 'fixed';
-	host.style.zIndex = '2147483647';
+	host.style.zIndex = String(MAX_Z_INDEX);
 	host.style.pointerEvents = 'none';
 	document.documentElement.appendChild(host);
 	const shadow = host.attachShadow({ mode: 'open' });
 	shadowRoot = shadow;
 	// Inject compiled CSS into the shadow root so Svelte styles apply
-	const styleLink = document.createElement('link');
-	styleLink.rel = 'stylesheet';
-	styleLink.href = chrome.runtime.getURL('content-script.css');
-	shadow.appendChild(styleLink);
+	injectStyles(shadow);
 	const mountPoint = document.createElement('div');
 	mountPoint.style.pointerEvents = 'auto';
 	mountPoint.style.width = '100%';
@@ -112,18 +204,16 @@ function initPanel() {
 	const buttonHost = document.createElement('div');
 	buttonHost.id = 'button-root';
 	buttonHost.style.position = 'fixed';
-	buttonHost.style.zIndex = '2147483647';
+	buttonHost.style.zIndex = String(MAX_Z_INDEX);
 	buttonHost.style.pointerEvents = 'none';
+	buttonHost.style.display = 'block'; // Ensure button is visible by default, will be controlled by updateButtonVisibility
 	// Set initial position (will be overridden by FloatingButton component if saved position exists)
-	buttonHost.style.left = `${window.innerWidth * 0.02}px`; // 2% from left
-	buttonHost.style.top = `${window.innerHeight * 0.9}px`; // 90% from top (near bottom)
+	buttonHost.style.left = `${window.innerWidth * DEFAULT_BUTTON_LAYOUT.X_PERCENT}px`; // 2% from left
+	buttonHost.style.top = `${window.innerHeight * DEFAULT_BUTTON_LAYOUT.Y_PERCENT}px`; // 90% from top (near bottom)
 	document.documentElement.appendChild(buttonHost);
 	// Attach a shadow root for style isolation and inject stylesheet
 	const buttonShadow = buttonHost.attachShadow({ mode: 'open' });
-	const styleLink2 = document.createElement('link');
-	styleLink2.rel = 'stylesheet';
-	styleLink2.href = chrome.runtime.getURL('content-script.css');
-	buttonShadow.appendChild(styleLink2);
+	injectStyles(buttonShadow);
 	const buttonMountPoint = document.createElement('div');
 	buttonMountPoint.style.pointerEvents = 'auto';
 	buttonShadow.appendChild(buttonMountPoint);
@@ -142,10 +232,10 @@ function initPanel() {
 
 	loadLayout().then((layout) => {
 		const defaultLayout = {
-			x: window.innerWidth * 0.15,
-			y: window.innerHeight * 0.1,
-			width: window.innerWidth * 0.49,
-			height: window.innerHeight * 0.8,
+			x: window.innerWidth * DEFAULT_PANEL_LAYOUT.X_PERCENT,
+			y: window.innerHeight * DEFAULT_PANEL_LAYOUT.Y_PERCENT,
+			width: window.innerWidth * DEFAULT_PANEL_LAYOUT.WIDTH_PERCENT,
+			height: window.innerHeight * DEFAULT_PANEL_LAYOUT.HEIGHT_PERCENT,
 			visible: layout.visible !== undefined ? layout.visible : true
 		};
 

@@ -10,6 +10,8 @@
 
 	let { tabMode = false, onLayoutChange, onMinimize }: Props = $props();
 
+	const DEBOUNCE_MS = 300;
+
 	let content = $state('');
 	let editor: HTMLDivElement | null = $state(null);
 	let isDragging = $state(false);
@@ -25,7 +27,7 @@
 		if (saveTimeout) clearTimeout(saveTimeout);
 		saveTimeout = setTimeout(() => {
 			saveNote(text);
-		}, 300);
+		}, DEBOUNCE_MS);
 	}
 
 	function handleInput(e: Event) {
